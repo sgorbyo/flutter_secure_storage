@@ -53,3 +53,21 @@ before production integration. No blanket promise of one prompt on every OS.
 Apple contract references:
 - https://developer.apple.com/documentation/security/ksecuseauthenticationcontext
 - https://developer.apple.com/documentation/localauthentication/lacontext/invalidate()
+
+## First physical macOS observation (2026-10-31)
+
+Code commit 3f065aed4a9275a2bafe7f57e7fdf6e118b114a4, isolated signed consumer.
+An existing synthetic item created by the old implementation remained readable
+through the ordinary API. Two separate verified updates each required one Touch
+ID, compared with three for ordinary write plus readback in the baseline probe.
+A third verified update was cancelled by the user: errSecUserCanceled (-128),
+followed by a successful ordinary read of the original value. Every ordinary
+read also required one prompt. Counts were supplied by the device owner; phase
+completion and native cancellation status were checked against the probe log.
+
+Scope: the same value was rewritten. Different-value update, new-item creation,
+programmatic cancellation/retry, native lifecycle/crash tests and physical iOS
+acceptance remain pending. These observations do not certify production readiness.
+Local verification: 13 Swift tests, 4 Dart tests, clean Dart analyzer, whole-plugin
+iOS and macOS typechecks, and signed macOS consumer build succeeded. Remote CI
+run 41234415479 was cancelled; do not interpret it as passing.
