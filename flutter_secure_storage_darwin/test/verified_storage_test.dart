@@ -23,10 +23,17 @@ void main() {
       'accessControlFlags': 'userPresence'
     };
     await DarwinVerifiedStorage.writeAndVerify(
-        key: 'canary', value: 'synthetic', options: options);
+        key: 'canary',
+        value: 'synthetic',
+        localizedReason: 'Test protected write',
+        options: options);
     expect(calls.single.method, 'writeAndVerify');
-    expect(calls.single.arguments,
-        {'key': 'canary', 'value': 'synthetic', 'options': options});
+    expect(calls.single.arguments, {
+      'key': 'canary',
+      'value': 'synthetic',
+      'localizedReason': 'Test protected write',
+      'options': options
+    });
   });
   test('cancellation is an independent channel call', () async {
     await DarwinVerifiedStorage.cancelPendingWrites();
@@ -37,6 +44,7 @@ void main() {
         DarwinVerifiedStorage.writeAndVerify(
             key: 'canary',
             value: 'synthetic',
+            localizedReason: 'Test protected write',
             options: {'useSecureEnclave': 'true'}),
         throwsArgumentError);
     expect(calls, isEmpty);
@@ -49,7 +57,10 @@ void main() {
     });
     await expectLater(
         DarwinVerifiedStorage.writeAndVerify(
-            key: 'canary', value: 'synthetic', options: {}),
+            key: 'canary',
+            value: 'synthetic',
+            localizedReason: 'Test protected write',
+            options: {}),
         throwsA(isA<PlatformException>()));
     expect(calls, hasLength(1));
   });

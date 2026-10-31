@@ -162,6 +162,8 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
         guard let arguments = call.arguments as? [String: Any],
               let key = arguments["key"] as? String, !key.isEmpty,
               arguments["value"] is String,
+              let reason = arguments["localizedReason"] as? String,
+              !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let options = arguments["options"] as? [String: String],
               options["useSecureEnclave"] != "true" else {
             result(FlutterError(code: "Invalid verified write", message: "Requires key, value, options and non-Enclave storage", details: nil))
@@ -174,7 +176,7 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
         defer { verifiedContexts.end(context) }
         let (params, value) = parseCall(call)
         let response = flutterSecureStorageManager.writeAndVerify(
-            params: params, value: value!, context: context,
+            params: params, value: value!, context: context, localizedReason: reason,
             isCancelled: { !self.verifiedContexts.isValid(ticket, context) }
         )
         handleResponse(response, result)

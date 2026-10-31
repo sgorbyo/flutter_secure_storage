@@ -91,3 +91,19 @@ Do not claim the sleep cancellation requirement passes merely because the probe
 advanced after manual cancellation. No production integration until corrected
 and re-tested. Physical iOS and abrupt-process-interruption acceptance remain
 outstanding; this run tested orderly application restart, not an OS reboot.
+
+## Sleep prompt correction under native validation
+
+The verified operation now explicitly evaluates its requested SecAccessControl
+with `LAContext.evaluateAccessControl(.useItem)` on the same scoped context.
+Subsequent Keychain operations have `interactionNotAllowed = true`: the actual
+stored ACL still applies, and insufficient authorization fails closed without
+opening a separate Keychain-owned prompt. There is no weaker fallback. A new
+required `localizedReason` argument supplies the application's prompt purpose.
+Noninteractive/skip UI options are rejected before prompting or mutation.
+
+This addresses ownership of the pending evaluation; logical invalidation alone
+had not dismissed the previous Keychain-owned prompt. Existing ordinary APIs,
+ACLs, item identifiers and payload formats are unchanged. Native automatic
+cancellation and sleep/wake must pass before claiming the defect corrected.
+Apple reference: https://developer.apple.com/documentation/localauthentication/lacontext/evaluateaccesscontrol(_:operation:localizedreason:reply:)

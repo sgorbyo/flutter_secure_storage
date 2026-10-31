@@ -14,14 +14,18 @@ abstract final class DarwinVerifiedStorage {
   static Future<void> writeAndVerify({
     required String key,
     required String value,
+    required String localizedReason,
     required Map<String, String> options,
   }) async {
-    if (key.isEmpty || options['useSecureEnclave'] == 'true') {
+    if (key.isEmpty ||
+        localizedReason.trim().isEmpty ||
+        options['useSecureEnclave'] == 'true') {
       throw ArgumentError('Requires a nonempty key and non-Enclave storage');
     }
     await _channel.invokeMethod<void>('writeAndVerify', {
       'key': key,
       'value': value,
+      'localizedReason': localizedReason,
       'options': Map<String, String>.of(options),
     });
   }

@@ -87,9 +87,12 @@ struct OSSecError: Error {
 
 class FlutterSecureStorage {
     private let verifiedKeychain: VerifiedKeychain
+    private let verifiedAuthentication: VerifiedAuthentication
 
-    init(verifiedKeychain: VerifiedKeychain = SystemVerifiedKeychain()) {
+    init(verifiedKeychain: VerifiedKeychain = SystemVerifiedKeychain(),
+         verifiedAuthentication: VerifiedAuthentication = SystemVerifiedAuthentication()) {
         self.verifiedKeychain = verifiedKeychain
+        self.verifiedAuthentication = verifiedAuthentication
     }
 
     /// A bounded, non-Enclave write and real readback. Never delete on failure.
@@ -98,19 +101,35 @@ class FlutterSecureStorage {
         params: KeychainQueryParameters,
         value: String,
         context: LAContext,
+        localizedReason: String,
         isCancelled: () -> Bool
     ) -> FlutterSecureStorageResponse {
         func response(_ status: OSStatus) -> FlutterSecureStorageResponse {
             FlutterSecureStorageResponse(status: status, value: nil)
         }
         guard let key = params.key, !key.isEmpty,
+              !localizedReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               params.useSecureEnclave != true,
               params.shouldReturnPersistentReference != true else { return response(errSecParam) }
+        if let ui = params.authenticationUIBehavior, ui != (kSecUseAuthenticationUIAllow as String) {
+            return response(errSecInteractionNotAllowed)
+        }
         do { try validateQueryParameters(params: params) }
         catch { return response(errSecParam) }
         var scoped = params
         scoped.authenticationContext = context
         scoped.shouldReturnData = true
+        if isCancelled() { return response(errSecUserCanceled) }
+        // Evaluate the requested ACL explicitly. Keychain still enforces the actual
+        // stored ACL; a mismatch fails closed below, without another unmanaged UI.
+        if let accessControl = createAccessControl(params: scoped) {
+            let authStatus = verifiedAuthentication.authorize(context, accessControl: accessControl, reason: localizedReason)
+            if isCancelled() { return response(errSecUserCanceled) }
+            guard authStatus == errSecSuccess else { return response(authStatus) }
+        } else if !parseAccessControlFlags(scoped.accessControlFlags).isEmpty {
+            return response(errSecParam)
+        }
+        context.interactionNotAllowed = true
         var query = baseQuery(from: scoped)
         query.removeValue(forKey: kSecReturnData)
         query.removeValue(forKey: kSecReturnPersistentRef)
