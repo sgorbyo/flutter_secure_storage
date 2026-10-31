@@ -1,0 +1,45 @@
+name: Apple verified write
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/apple-verified-write]
+    paths:
+      - 'flutter_secure_storage_darwin/**'
+      - '.github/workflows/apple-verified-write.yml'
+  pull_request:
+    paths:
+      - 'flutter_secure_storage_darwin/**'
+      - '.github/workflows/apple-verified-write.yml'
+permissions:
+  contents: read
+jobs:
+  verified-write:
+    runs-on: macos-14
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: flutter_secure_storage_darwin
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Native regression tests
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/igen_test_logs
+          swift test 2>&1 | tee /tmp/igen_test_logs/native.log
+      - name: Resolve Dart dependencies
+        run: flutter pub get
+      - name: Analyze and test Dart API
+        run: |
+          set -o pipefail
+          dart analyze lib test 2>&1 | tee /tmp/igen_test_logs/analyze.log
+          flutter test 2>&1 | tee /tmp/igen_test_logs/flutter.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apple-verified-write-logs
+          path: /tmp/igen_test_logs/
