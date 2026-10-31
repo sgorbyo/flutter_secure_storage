@@ -111,3 +111,26 @@ Apple reference: https://developer.apple.com/documentation/localauthentication/l
 The new API rejects any explicit legacy authenticationUIBehavior option; leave
 it absent. Prompt control uses LAContext exclusively, avoiding deprecated UI
 constants and ambiguous legacy allow/skip behavior. Ordinary APIs are unchanged.
+
+## Corrected prompt: physical macOS acceptance (2026-10-31)
+
+Code commit 6d4de3886c53da84870663b6e7d52e5720b366df, isolated signed consumer,
+new synthetic fixture. Owner-confirmed automatic prompt dismissal in both:
+
+- Programmatic cancel four seconds after starting authentication, without
+  authenticating or pressing Cancel; native operation returns revoked.
+- Standby requested with authentication pending, without manual interaction;
+  prompt dismissed automatically. OS power log confirms sleep at 22:35:13 +0100
+  and wake at 22:36:24 +0100. Cancellation was delivered at the sleep request,
+  before actual system sleep, as intended.
+
+The previous value was preserved. Retry with a different Unicode payload and
+ordinary-API readback passed. Orderly app restart (boot 1 -> 2) preserved that
+payload. Creation, retry, and each ordinary read required one fresh Touch ID.
+All existing archive inventories and file hashes remained unchanged.
+
+The earlier sleep-prompt defect is resolved for these observed Mac scenarios.
+17 native unit tests and 4 Dart channel tests pass; Dart analysis is clean.
+The exact revision also typechecks against iOS, but physical iOS, abrupt-process
+interruption and application workflow integration remain outstanding. This is
+not a global Apple acceptance or a production deployment assertion.
