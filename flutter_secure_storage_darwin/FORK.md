@@ -107,3 +107,7 @@ had not dismissed the previous Keychain-owned prompt. Existing ordinary APIs,
 ACLs, item identifiers and payload formats are unchanged. Native automatic
 cancellation and sleep/wake must pass before claiming the defect corrected.
 Apple reference: https://developer.apple.com/documentation/localauthentication/lacontext/evaluateaccesscontrol(_:operation:localizedreason:reply:)
+
+The new API rejects any explicit legacy authenticationUIBehavior option; leave
+it absent. Prompt control uses LAContext exclusively, avoiding deprecated UI
+constants and ambiguous legacy allow/skip behavior. Ordinary APIs are unchanged.

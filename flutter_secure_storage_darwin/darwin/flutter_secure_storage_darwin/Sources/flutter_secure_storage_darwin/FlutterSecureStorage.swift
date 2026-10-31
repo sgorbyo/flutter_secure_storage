@@ -111,7 +111,7 @@ class FlutterSecureStorage {
               !localizedReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               params.useSecureEnclave != true,
               params.shouldReturnPersistentReference != true else { return response(errSecParam) }
-        if let ui = params.authenticationUIBehavior, ui != (kSecUseAuthenticationUIAllow as String) {
+        if params.authenticationUIBehavior != nil {
             return response(errSecInteractionNotAllowed)
         }
         do { try validateQueryParameters(params: params) }
