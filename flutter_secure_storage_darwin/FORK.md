@@ -150,3 +150,32 @@ does not override a separate protected-data suspension. Physical retest pending.
 
 References: https://docs.flutter.dev/release/breaking-changes/uiscenedelegate
 and https://developer.apple.com/documentation/uikit/uiapplicationdelegate/applicationdidenterbackground(_:)
+
+## Physical iPad acceptance and status qualification (2026-10-31)
+
+Isolated iPad Pro 11-inch (2nd generation), iOS 26.6. On 6d4de, five real
+consumer journal writes each required one authentication; explicit app-lock
+and logout revocations dismissed the prompt, rejected stale actions and
+preserved the old record. Ordinary readbacks required one authentication.
+
+On code commit 1da2d3ce762cf51f8e70789b4d2dd81c6edd5658, background instrumentation
+recorded errSecUserCanceled (-128) BEFORE the application's paused event. iOS
+can cancel LocalAuthentication before UIKit background notification delivery;
+the existing response adapter exposes -128 as `Unexpected security result code`.
+Do not require the generation-specific text `Verified write cancelled` as the
+only valid cancellation outcome. Do not accept arbitrary errors as cancellation.
+The corrected development probe required both the exact cancellation status
+and an actual paused event, then verified byte-equivalent old data after return.
+This physical run does not demonstrate an active prompt surviving until the
+fork's background notification callback: the OS cancelled it earlier.
+
+A changed-payload retry and ordinary read after terminating/relaunching only the
+probe (boot 3 -> 4) succeeded, each with one fresh authentication. 20 Swift tests,
+4 Dart tests, whole-plugin iOS typecheck and clean analyzer pass; 36 consumer
+regression tests and its analyzer pass. The earlier rejected background trials
+remain recorded as failed instrumentation attempts, not retroactive successes.
+
+No production user item or archive was accessed, no Cloud operation performed,
+and no store release made. This does not certify physical device lock, reboot,
+or the complete server-backed C04 workflow. Mac physical evidence still refers
+to 6d4de; the new observer wiring is compiled only for iOS.
