@@ -31,3 +31,7 @@ pubspec_overrides.yaml
 .packages
 build/
 flutter_secure_storage_windows/coverage/lcov.info
+
+# Native package tests
+.build/
+.swiftpm/

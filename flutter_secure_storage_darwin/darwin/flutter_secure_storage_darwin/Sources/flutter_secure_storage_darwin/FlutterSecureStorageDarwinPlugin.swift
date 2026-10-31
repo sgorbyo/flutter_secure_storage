@@ -14,8 +14,35 @@ import FlutterMacOS
 public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
     private let flutterSecureStorageManager: FlutterSecureStorage = FlutterSecureStorage()
+    private let verifiedContexts = VerifiedWriteContexts()
     private var secStoreAvailabilitySink: FlutterEventSink?
     private let serialExecutionQueue = DispatchQueue(label: "flutter_secure_storage_service")
+
+    #if os(macOS)
+    private var workspaceObservers: [NSObjectProtocol] = []
+
+    public override init() {
+        super.init()
+        let center = NSWorkspace.shared.notificationCenter
+        for (notification, reason) in [(NSWorkspace.willSleepNotification, "sleep"),
+                                       (NSWorkspace.sessionDidResignActiveNotification, "session")] {
+            workspaceObservers.append(center.addObserver(forName: notification, object: nil, queue: .main) { [weak self] _ in
+                self?.verifiedContexts.cancel(suspending: reason)
+            })
+        }
+        for (notification, reason) in [(NSWorkspace.didWakeNotification, "sleep"),
+                                       (NSWorkspace.sessionDidBecomeActiveNotification, "session")] {
+            workspaceObservers.append(center.addObserver(forName: notification, object: nil, queue: .main) { [weak self] _ in
+                self?.verifiedContexts.resume(reason)
+            })
+        }
+    }
+
+    deinit {
+        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        verifiedContexts.cancel()
+    }
+    #endif
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         #if os(iOS)
@@ -39,8 +66,25 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
             }
         }
 
+        // Cancellation must bypass the serial queue blocked by a native prompt.
+        if call.method == "cancelVerifiedWrites" {
+            verifiedContexts.cancel()
+            handleResult(nil)
+            return
+        }
+        let ticket = verifiedContexts.ticket()
         serialExecutionQueue.async {
             switch call.method {
+            case "writeAndVerify":
+                self.writeAndVerify(call, ticket: ticket) { value in
+                    DispatchQueue.main.async {
+                        guard self.verifiedContexts.isCurrent(ticket) else {
+                            result(FlutterError(code: "Verified write cancelled", message: nil, details: nil))
+                            return
+                        }
+                        result(value)
+                    }
+                }
             case "read":
                 self.read(call, handleResult)
             case "write":
@@ -83,24 +127,58 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
     }
 
     #if os(iOS)
+    public func applicationDidEnterBackground(_ application: UIApplication) {
+        verifiedContexts.cancel(suspending: "background")
+    }
+
+    public func applicationWillEnterForeground(_ application: UIApplication) {
+        verifiedContexts.resume("background")
+    }
+
     public func applicationProtectedDataDidBecomeAvailable(_ application: UIApplication) {
+        verifiedContexts.resume("protectedData")
         secStoreAvailabilitySink?(true)
     }
 
     public func applicationProtectedDataWillBecomeUnavailable(_ application: UIApplication) {
+        verifiedContexts.cancel(suspending: "protectedData")
         secStoreAvailabilitySink?(false)
     }
     #else
     @objc @available(macOS 12.0, *)
     public func applicationProtectedDataDidBecomeAvailable(_ notification: Notification) {
+        verifiedContexts.resume("protectedData")
         secStoreAvailabilitySink?(true)
     }
 
     @objc @available(macOS 12.0, *)
     public func applicationProtectedDataWillBecomeUnavailable(_ notification: Notification) {
+        verifiedContexts.cancel(suspending: "protectedData")
         secStoreAvailabilitySink?(false)
     }
     #endif
+
+    private func writeAndVerify(_ call: FlutterMethodCall, ticket: UInt64, _ result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let key = arguments["key"] as? String, !key.isEmpty,
+              arguments["value"] is String,
+              let options = arguments["options"] as? [String: String],
+              options["useSecureEnclave"] != "true" else {
+            result(FlutterError(code: "Invalid verified write", message: "Requires key, value, options and non-Enclave storage", details: nil))
+            return
+        }
+        guard let context = verifiedContexts.begin(ticket) else {
+            result(FlutterError(code: "Verified write cancelled", message: nil, details: nil))
+            return
+        }
+        defer { verifiedContexts.end(context) }
+        let (params, value) = parseCall(call)
+        let response = flutterSecureStorageManager.writeAndVerify(
+            params: params, value: value!, context: context,
+            isCancelled: { !self.verifiedContexts.isValid(ticket, context) }
+        )
+        handleResponse(response, result)
+    }
 
     private func read(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
         let (params, _) = parseCall(call)

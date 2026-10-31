@@ -86,6 +86,55 @@ struct OSSecError: Error {
 }
 
 class FlutterSecureStorage {
+    private let verifiedKeychain: VerifiedKeychain
+
+    init(verifiedKeychain: VerifiedKeychain = SystemVerifiedKeychain()) {
+        self.verifiedKeychain = verifiedKeychain
+    }
+
+    /// A bounded, non-Enclave write and real readback. Never delete on failure.
+    /// Cancellation after a successful write is an uncertain outcome, not rollback.
+    internal func writeAndVerify(
+        params: KeychainQueryParameters,
+        value: String,
+        context: LAContext,
+        isCancelled: () -> Bool
+    ) -> FlutterSecureStorageResponse {
+        func response(_ status: OSStatus) -> FlutterSecureStorageResponse {
+            FlutterSecureStorageResponse(status: status, value: nil)
+        }
+        guard let key = params.key, !key.isEmpty,
+              params.useSecureEnclave != true,
+              params.shouldReturnPersistentReference != true else { return response(errSecParam) }
+        do { try validateQueryParameters(params: params) }
+        catch { return response(errSecParam) }
+        var scoped = params
+        scoped.authenticationContext = context
+        scoped.shouldReturnData = true
+        var query = baseQuery(from: scoped)
+        query.removeValue(forKey: kSecReturnData)
+        query.removeValue(forKey: kSecReturnPersistentRef)
+        query.removeValue(forKey: kSecMatchLimit)
+        let bytes = Data(value.utf8)
+        if isCancelled() { return response(errSecUserCanceled) }
+        var status = verifiedKeychain.update(query, [kSecValueData: bytes])
+        if isCancelled() { return response(errSecUserCanceled) }
+        if status == errSecItemNotFound {
+            var addition = query
+            addition[kSecValueData] = bytes
+            status = verifiedKeychain.add(addition)
+        }
+        if isCancelled() { return response(errSecUserCanceled) }
+        guard status == errSecSuccess else { return response(status) }
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        let (readStatus, readBytes) = verifiedKeychain.read(query)
+        if isCancelled() { return response(errSecUserCanceled) }
+        guard readStatus == errSecSuccess else { return response(readStatus) }
+        guard readBytes == bytes else { return response(errSecDecode) }
+        return response(errSecSuccess)
+    }
+
     /// Parses the accessibility attribute into a CFString value.
     private func parseAccessibleAttr(_ accessibilityLevel: String?) -> CFString {
         switch accessibilityLevel {
