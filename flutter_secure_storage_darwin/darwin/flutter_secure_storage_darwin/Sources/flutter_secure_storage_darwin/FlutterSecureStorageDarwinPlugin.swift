@@ -18,6 +18,25 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
     private var secStoreAvailabilitySink: FlutterEventSink?
     private let serialExecutionQueue = DispatchQueue(label: "flutter_secure_storage_service")
 
+    #if os(iOS)
+    private var applicationLifecycle: VerifiedWriteLifecycle?
+
+    public override init() {
+        super.init()
+        // UIApplication notifications describe the aggregate app state even
+        // with UIScene. Legacy UIApplicationDelegate UI callbacks do not.
+        applicationLifecycle = VerifiedWriteLifecycle(
+            contexts: verifiedContexts,
+            center: .default,
+            transitions: [
+                (UIApplication.didEnterBackgroundNotification, "background", true),
+                (UIApplication.willEnterForegroundNotification, "background", false)
+            ])
+    }
+
+    deinit { verifiedContexts.cancel() }
+    #endif
+
     #if os(macOS)
     private var workspaceObservers: [NSObjectProtocol] = []
 
@@ -127,14 +146,6 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
     }
 
     #if os(iOS)
-    public func applicationDidEnterBackground(_ application: UIApplication) {
-        verifiedContexts.cancel(suspending: "background")
-    }
-
-    public func applicationWillEnterForeground(_ application: UIApplication) {
-        verifiedContexts.resume("background")
-    }
-
     public func applicationProtectedDataDidBecomeAvailable(_ application: UIApplication) {
         verifiedContexts.resume("protectedData")
         secStoreAvailabilitySink?(true)

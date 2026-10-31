@@ -134,3 +134,19 @@ The earlier sleep-prompt defect is resolved for these observed Mac scenarios.
 The exact revision also typechecks against iOS, but physical iOS, abrupt-process
 interruption and application workflow integration remain outstanding. This is
 not a global Apple acceptance or a production deployment assertion.
+
+## iOS scene lifecycle correction (2026-10-31)
+
+Physical iPad testing passed five journal writes (one authentication each),
+explicit lock/logout revocation and unchanged-value readbacks, but background
+acceptance failed in a UIScene-based consumer. The plugin registered only legacy
+UIApplicationDelegate background/foreground callbacks; Flutter's scene lifecycle
+does not forward those UI callbacks. The correction observes UIApplication's
+aggregate background/foreground notifications, compatible with both scene and
+legacy lifecycles and without raising the minimum Flutter API requirement.
+It does not cancel on inactive/focus loss, which native authentication itself
+can cause. Notification subscriptions are removed with the plugin; foreground
+does not override a separate protected-data suspension. Physical retest pending.
+
+References: https://docs.flutter.dev/release/breaking-changes/uiscenedelegate
+and https://developer.apple.com/documentation/uikit/uiapplicationdelegate/applicationdidenterbackground(_:)
