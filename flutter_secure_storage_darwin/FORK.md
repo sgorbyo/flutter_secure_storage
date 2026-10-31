@@ -71,3 +71,23 @@ acceptance remain pending. These observations do not certify production readines
 Local verification: 13 Swift tests, 4 Dart tests, clean Dart analyzer, whole-plugin
 iOS and macOS typechecks, and signed macOS consumer build succeeded. Remote CI
 run 41234415479 was cancelled; do not interpret it as passing.
+
+## Extended physical macOS acceptance (2026-10-31)
+
+Same native code commit, new synthetic fixture. New-item creation and a real
+payload change (different contents, length and Unicode) succeeded with one Touch
+ID each. Ordinary-API readbacks matched. Following a system sleep/wake cycle,
+the pre-interruption payload was preserved, retry with a new payload succeeded,
+and ordinary read after quitting/relaunching the app matched the retry payload.
+Each of these reads and the retry required one Touch ID. Existing user archive
+inventories/hashes were unchanged.
+
+**Open defect: pending native prompt is not dismissed automatically on sleep.**
+The power log confirms actual sleep at 22:21:58 +0100 and wake at 22:22:44 +0100.
+The prompt remained pending until the owner pressed Cancel. The call then
+returned `Verified write cancelled`, establishing logical invalidation but not
+prompt dismissal. The exact native cancellation failure is not yet isolated.
+Do not claim the sleep cancellation requirement passes merely because the probe
+advanced after manual cancellation. No production integration until corrected
+and re-tested. Physical iOS and abrupt-process-interruption acceptance remain
+outstanding; this run tested orderly application restart, not an OS reboot.
