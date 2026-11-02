@@ -94,6 +94,16 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
         let ticket = verifiedContexts.ticket()
         serialExecutionQueue.async {
             switch call.method {
+            case "readBatch":
+                self.readBatch(call, ticket: ticket) { value in
+                    DispatchQueue.main.async {
+                        guard self.verifiedContexts.isCurrent(ticket) else {
+                            result(FlutterError(code: "Protected read cancelled", message: nil, details: nil))
+                            return
+                        }
+                        result(value)
+                    }
+                }
             case "writeAndVerify":
                 self.writeAndVerify(call, ticket: ticket) { value in
                     DispatchQueue.main.async {
@@ -191,6 +201,30 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
             isCancelled: { !self.verifiedContexts.isValid(ticket, context) }
         )
         handleResponse(response, result)
+    }
+
+    private func readBatch(_ call: FlutterMethodCall, ticket: UInt64, _ result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let keys = arguments["keys"] as? [String],
+              let reason = arguments["localizedReason"] as? String,
+              let options = arguments["options"] as? [String: String],
+              !keys.isEmpty, keys.count <= 32, Set(keys).count == keys.count,
+              keys.allSatisfy({ !$0.isEmpty }), !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              options["useSecureEnclave"] != "true" else {
+            result(FlutterError(code: "Invalid protected read", message: nil, details: nil)); return
+        }
+        guard let context = verifiedContexts.begin(ticket) else {
+            result(FlutterError(code: "Protected read cancelled", message: nil, details: nil)); return
+        }
+        defer { verifiedContexts.end(context) }
+        let (params, _) = parseCall(call)
+        let (status, values) = flutterSecureStorageManager.readBatch(params: params, keys: keys,
+            context: context, localizedReason: reason,
+            isCancelled: { !self.verifiedContexts.isValid(ticket, context) })
+        guard status == errSecSuccess, let values = values else {
+            result(FlutterError(code: "Protected read failed", message: String(status), details: nil)); return
+        }
+        result(values.mapValues { $0 as Any? ?? NSNull() })
     }
 
     private func read(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {

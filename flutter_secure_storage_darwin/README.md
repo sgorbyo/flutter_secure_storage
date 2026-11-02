@@ -38,3 +38,25 @@ Refer to the main [flutter_secure_storage README](../README.md) for common usage
 ## License
 
 This project is licensed under the BSD 3 License. See the [LICENSE](../LICENSE) file for details.
+
+
+### Bounded protected reads (owned fork)
+
+`DarwinVerifiedStorage.readBatch` reads an explicit set of 1–32 keys using one
+fresh, operation-scoped authentication context. Missing items return null; an
+error, cancellation or stricter stored ACL fails the complete batch, without a
+partial result or weaker fallback. A noninteractive probe avoids prompting for
+absent items. Authorization is requested at most once inside the batch; actual
+Keychain ACLs remain enforced. Secure Enclave and persistent-reference queries
+are not supported by this API.
+
+`cancelPendingOperations` revokes active and queued bounded reads and verified
+writes. Native background/protected-data/sleep/session lifecycle guards are shared
+with verified writes. Ordinary legacy read/write calls are unchanged. No session
+token survives the call. Callers must discard late results after their own
+navigation/logout generation changes. System authentication panels do not by
+themselves count as app background.
+
+Current consumer: iGen startup journal reconciliation before account restoration.
+Account-key unlock remains a separate security phase. The API does not promise
+one authentication for an entire app startup.

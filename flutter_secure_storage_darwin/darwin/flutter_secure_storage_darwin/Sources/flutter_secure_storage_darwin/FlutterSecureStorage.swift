@@ -154,6 +154,56 @@ class FlutterSecureStorage {
         return response(errSecSuccess)
     }
 
+    /// Fixed batch, no persistent session token and no partial success.
+    internal func readBatch(params: KeychainQueryParameters, keys: [String],
+                            context: LAContext, localizedReason: String,
+                            isCancelled: () -> Bool) -> (OSStatus, [String: String?]?) {
+        guard !keys.isEmpty, keys.count <= 32, Set(keys).count == keys.count,
+              keys.allSatisfy({ !$0.isEmpty }), params.useSecureEnclave != true,
+              params.shouldReturnPersistentReference != true,
+              params.authenticationUIBehavior == nil,
+              !localizedReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return (errSecParam, nil)
+        }
+        do { try validateQueryParameters(params: params) }
+        catch { return (errSecParam, nil) }
+        var scoped = params
+        scoped.authenticationContext = context
+        scoped.shouldReturnData = true
+        // Probe non-interactively first: an absent journal must not cause a prompt.
+        context.interactionNotAllowed = true
+        var authorized = false
+        var values = [String: String?]()
+        for key in keys {
+            if isCancelled() { return (errSecUserCanceled, nil) }
+            scoped.key = key
+            var query = baseQuery(from: scoped)
+            query[kSecMatchLimit] = kSecMatchLimitOne
+            var (status, data) = verifiedKeychain.read(query)
+            if isCancelled() { return (errSecUserCanceled, nil) }
+            if status == errSecInteractionNotAllowed && !authorized {
+                guard let control = createAccessControl(params: scoped) else { return (status, nil) }
+                context.interactionNotAllowed = false
+                let authorization = verifiedAuthentication.authorize(context, accessControl: control, reason: localizedReason)
+                context.interactionNotAllowed = true
+                if isCancelled() { return (errSecUserCanceled, nil) }
+                guard authorization == errSecSuccess else { return (authorization, nil) }
+                authorized = true
+                (status, data) = verifiedKeychain.read(query)
+                if isCancelled() { return (errSecUserCanceled, nil) }
+            }
+            if status == errSecItemNotFound {
+                values[key] = .some(nil)
+            } else {
+                guard status == errSecSuccess else { return (status, nil) }
+                guard let data = data, let value = String(data: data, encoding: .utf8) else { return (errSecDecode, nil) }
+                values[key] = value
+            }
+        }
+        if isCancelled() { return (errSecUserCanceled, nil) }
+        return (errSecSuccess, values)
+    }
+
     /// Parses the accessibility attribute into a CFString value.
     private func parseAccessibleAttr(_ accessibilityLevel: String?) -> CFString {
         switch accessibilityLevel {
