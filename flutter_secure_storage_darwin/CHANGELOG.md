@@ -28,3 +28,11 @@ This package combines flutter_secure_storage_macos together with the ios part of
 Other changes:
 - Code has been rebuild from the ground up
 - Lots of missing attributes have been added to the IOSOptions and MacOsOptions classes.
+
+## Fork: bounded authorization scopes
+
+* Add immutable, expiring Darwin action scopes with per-key quotas, verified
+  writes, add-only creation, owner revocation and evaluation events.
+* Reject interleaved namespace access while a scope is active; keep ordinary
+  behavior unchanged outside scopes.
+* Preserve uncertainty after interrupted writes; no automatic retry or fallback.

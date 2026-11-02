@@ -179,3 +179,36 @@ No production user item or archive was accessed, no Cloud operation performed,
 and no store release made. This does not certify physical device lock, reboot,
 or the complete server-backed C04 workflow. Mac physical evidence still refers
 to 6d4de; the new observer wiring is compiled only for iOS.
+
+## Finite mixed-operation scope (November 2, 2026)
+
+Adds `DarwinVerifiedStorage.openScope`, `revokeScopes`, evaluation events and
+`DarwinOperationScope` read/check/verified-write/add-only-create/close operations.
+Plans are immutable (23 exact slots, 28 declared reads/writes maximum), expire
+within 120 seconds on a monotonic clock and do not renew. These are protocol
+bounds, not measured iGen workload performance. The largest planned consumer
+includes two copy locators plus one Local source generation (21 material slots)
+and two journals; 23 reads and five writes including three legacy bundle
+migrations. iGen composition and workload gates remain pending.
+
+A single native authorization may serve the action, with actual Keychain ACLs
+and readbacks enforced throughout. No fallback to ordinary storage on error.
+Create is add-only. Failure can follow a completed write; normalized errors
+preserve mutation uncertainty, including channel errors. Close/revoke bypass
+blocked workers; owner epochs, sequence numbers, deadlines and delivery checks
+reject stale calls/results. A process-local namespace lease prevents overlapping
+engines and legacy reads/writes from interleaving. There is no cross-process
+transaction or rollback guarantee.
+
+Legacy methods retain their behavior outside scopes. During a scope, overlapping
+legacy calls fail `busy`, including reads that could show an independent prompt.
+macOS hide/sleep/session and iOS background/protected-data/detach revoke; Dart must
+also call revocation at navigation/logout/lock boundaries. Evaluation events
+identify the action nonce and epoch, not a transferable authorization.
+
+Verification: 58 Swift tests (44 core/registry plus 14 prior experiments), 17
+Dart tests, clean Dart analyzer, whole-plugin macOS and iOS-simulator typechecks,
+and noninteractive checks of the native method handler through the standard
+codec. The Swift suite retains the existing deprecated-constant warning in its
+legacy UI-option compatibility test. New production-channel physical tests and
+iGen integration are still pending; no new consumer pin is implied.

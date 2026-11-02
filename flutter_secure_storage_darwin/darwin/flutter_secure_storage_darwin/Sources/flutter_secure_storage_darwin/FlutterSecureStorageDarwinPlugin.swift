@@ -15,6 +15,8 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
 
     private let flutterSecureStorageManager: FlutterSecureStorage = FlutterSecureStorage()
     private let verifiedContexts = VerifiedWriteContexts()
+    private let scopes = AuthorizationScopeRegistry()
+    private let scopeEvents = ScopeEvaluationEvents()
     private var secStoreAvailabilitySink: FlutterEventSink?
     private let serialExecutionQueue = DispatchQueue(label: "flutter_secure_storage_service")
 
@@ -34,14 +36,23 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
             ])
     }
 
-    deinit { verifiedContexts.cancel() }
+    public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
+        scopes.cancel()
+        verifiedContexts.cancel(suspending: "detached")
+    }
+
+    deinit { scopes.cancel(); verifiedContexts.cancel() }
     #endif
 
     #if os(macOS)
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var visibilityLifecycle: VerifiedWriteLifecycle?
 
     public override init() {
         super.init()
+        visibilityLifecycle = VerifiedWriteLifecycle(contexts: verifiedContexts, center: .default,
+            transitions: [(NSApplication.didHideNotification, "hidden", true),
+                          (NSApplication.didUnhideNotification, "hidden", false)])
         let center = NSWorkspace.shared.notificationCenter
         for (notification, reason) in [(NSWorkspace.willSleepNotification, "sleep"),
                                        (NSWorkspace.sessionDidResignActiveNotification, "session")] {
@@ -59,6 +70,7 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
 
     deinit {
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        scopes.cancel()
         verifiedContexts.cancel()
     }
     #endif
@@ -76,6 +88,8 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
         registrar.addMethodCallDelegate(instance, channel: channel)
         registrar.addApplicationDelegate(instance)
         eventChannel.setStreamHandler(instance)
+        FlutterEventChannel(name: "plugins.it_nomads.com/flutter_secure_storage/scope_events",
+            binaryMessenger: messenger).setStreamHandler(instance.scopeEvents)
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -85,14 +99,36 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
             }
         }
 
+        if call.method.hasPrefix("scope") {
+            handleScope(call, result: result)
+            return
+        }
         // Cancellation must bypass the serial queue blocked by a native prompt.
         if call.method == "cancelVerifiedWrites" {
+            scopes.cancel()
             verifiedContexts.cancel()
             handleResult(nil)
             return
         }
         let ticket = verifiedContexts.ticket()
-        serialExecutionQueue.async {
+        serialExecutionQueue.async { [weak self] in
+            guard let self = self else {
+                handleResult(FlutterError(code: "revoked", message: nil, details: nil)); return
+            }
+            // Legacy access cannot interleave with a bounded action, including
+            // a read that might independently show authentication UI.
+            var lease: KeychainNamespaceLease?
+            if ["read", "write", "delete", "deleteAll", "readAll", "containsKey", "readBatch", "writeAndVerify"].contains(call.method) {
+                guard call.arguments is [String: Any] else {
+                    handleResult(FlutterError(code: "invalidPlan", message: nil, details: nil)); return
+                }
+                let (params, _) = Self.parseCall(call)
+                lease = KeychainNamespaceLease.acquire(params)
+                guard lease != nil else {
+                    handleResult(FlutterError(code: "busy", message: nil, details: nil)); return
+                }
+            }
+            defer { withExtendedLifetime(lease) {} }
             switch call.method {
             case "readBatch":
                 self.readBatch(call, ticket: ticket) { value in
@@ -140,6 +176,104 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
                 }
             default:
                 handleResult(FlutterMethodNotImplemented)
+            }
+        }
+    }
+
+    private func handleScope(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        func deliver(_ error: Error) {
+            let failure = error as? ScopeFailure ?? ScopeFailure("storageFailure")
+            result(FlutterError(code: failure.code, message: nil,
+                details: ["mutationMayHaveOccurred": failure.mutationMayHaveOccurred]))
+        }
+        guard let args = call.arguments as? [String: Any] else { deliver(ScopeFailure("invalidPlan")); return }
+        // Both branches run on main, bypassing a worker blocked in authentication.
+        if call.method == "scopeRevoke" {
+            do {
+                guard let epoch = args["nextOwnerEpoch"] as? Int64 else { throw ScopeFailure("invalidPlan") }
+                try scopes.revoke(nextEpoch: epoch)
+                verifiedContexts.cancel()
+                result(nil)
+            } catch { deliver(error) }
+            return
+        }
+        if call.method == "scopeClose" {
+            do {
+                guard let handle = args["handle"] as? String, let epoch = args["ownerEpoch"] as? Int64 else {
+                    throw ScopeFailure("invalidPlan")
+                }
+                try scopes.close(handle: handle, ownerEpoch: epoch)
+                result(nil)
+            } catch { deliver(error) }
+            return
+        }
+        let ticket = verifiedContexts.ticket()
+        serialExecutionQueue.async { [contexts = verifiedContexts, scopes = scopes, events = scopeEvents] in
+            var scope: BoundedAuthorizationScope?
+            var mutation = false
+            do {
+                guard contexts.isCurrent(ticket) else { throw ScopeFailure("revoked") }
+                guard let epoch = args["ownerEpoch"] as? Int64 else { throw ScopeFailure("invalidPlan") }
+                var value: Any?
+                if call.method == "scopeOpen" {
+                    guard let reason = args["localizedReason"] as? String,
+                          let nonce = args["actionNonce"] as? String, UUID(uuidString: nonce) != nil,
+                          let milliseconds = args["lifetimeMilliseconds"] as? Int,
+                          let raw = args["slots"] as? [[String: Any]],
+                          args["options"] is [String: String] else { throw ScopeFailure("invalidPlan") }
+                    let slots = try raw.map { row -> ScopeSlotRule in
+                        guard let key = row["key"] as? String, let access = row["access"] as? [String],
+                              Set(access).count == access.count,
+                              access.allSatisfy({ ["read", "writeVerified", "createVerified"].contains($0) }),
+                              let reads = row["maxReads"] as? Int, let writes = row["maxWrites"] as? Int else {
+                            throw ScopeFailure("invalidPlan")
+                        }
+                        return ScopeSlotRule(key: key, read: access.contains("read"),
+                            writeVerified: access.contains("writeVerified"), createVerified: access.contains("createVerified"),
+                            maxReads: reads, maxWrites: writes)
+                    }
+                    let (params, _) = Self.parseCall(call)
+                    scope = try scopes.open(ownerEpoch: epoch) {
+                        try BoundedAuthorizationScope(contexts: contexts, params: params,
+                            slots: slots, reason: reason, lifetime: Double(milliseconds) / 1000, ownerEpoch: epoch,
+                            evaluation: { [weak events] active in
+                                events?.emit(nonce: nonce, epoch: epoch, active: active)
+                            })
+                    }
+                    value = scope!.handle
+                } else {
+                    guard let handle = args["handle"] as? String, let sequence = args["sequence"] as? Int64 else {
+                        throw ScopeFailure("invalidPlan")
+                    }
+                    let active = try scopes.lookup(handle: handle, ownerEpoch: epoch)
+                    scope = active
+                    switch call.method {
+                    case "scopeReadBatch":
+                        guard let keys = args["keys"] as? [String] else { throw ScopeFailure("invalidPlan") }
+                        value = try active.readBatch(keys, epoch: epoch, sequence: sequence).mapValues { $0 as Any? ?? NSNull() }
+                    case "scopeWriteVerified", "scopeCreateVerified":
+                        guard let key = args["key"] as? String, let text = args["value"] as? String else {
+                            throw ScopeFailure("invalidPlan")
+                        }
+                        try active.write(key, value: text, createOnly: call.method == "scopeCreateVerified", epoch: epoch, sequence: sequence)
+                        mutation = true
+                    case "scopeCheck": try active.check(epoch: epoch, sequence: sequence)
+                    default: throw ScopeFailure("invalidPlan")
+                    }
+                }
+                let deliveredScope = scope, deliveredValue = value, mutated = mutation
+                DispatchQueue.main.async {
+                    do {
+                        guard let deliveredScope = deliveredScope else { throw ScopeFailure("unknownScope") }
+                        try deliveredScope.checkActive()
+                        result(deliveredValue)
+                    } catch let failure as ScopeFailure {
+                        deliver(ScopeFailure(failure.code, mutationMayHaveOccurred: mutated))
+                    } catch { deliver(error) }
+                }
+            } catch {
+                scope?.close((error as? ScopeFailure)?.code ?? "storageFailure")
+                DispatchQueue.main.async { deliver(error) }
             }
         }
     }
@@ -195,7 +329,7 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
             return
         }
         defer { verifiedContexts.end(context) }
-        let (params, value) = parseCall(call)
+        let (params, value) = Self.parseCall(call)
         let response = flutterSecureStorageManager.writeAndVerify(
             params: params, value: value!, context: context, localizedReason: reason,
             isCancelled: { !self.verifiedContexts.isValid(ticket, context) }
@@ -217,7 +351,7 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
             result(FlutterError(code: "Protected read cancelled", message: nil, details: nil)); return
         }
         defer { verifiedContexts.end(context) }
-        let (params, _) = parseCall(call)
+        let (params, _) = Self.parseCall(call)
         let (status, values) = flutterSecureStorageManager.readBatch(params: params, keys: keys,
             context: context, localizedReason: reason,
             isCancelled: { !self.verifiedContexts.isValid(ticket, context) })
@@ -228,7 +362,7 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
     }
 
     private func read(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        let (params, _) = parseCall(call)
+        let (params, _) = Self.parseCall(call)
         guard let _ = params.key else {
             result(FlutterError(code: "Missing Parameter", message: "read requires key parameter", details: nil))
             return
@@ -239,7 +373,7 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
     }
 
     private func write(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        let (params, value) = parseCall(call)
+        let (params, value) = Self.parseCall(call)
         guard let _ = params.key, let value = value else {
             result(FlutterError(code: "Missing Parameter", message: "write requires key and value parameters", details: nil))
             return
@@ -250,7 +384,7 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
     }
 
     private func delete(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        let (params, _) = parseCall(call)
+        let (params, _) = Self.parseCall(call)
         guard let _ = params.key else {
             result(FlutterError(code: "Missing Parameter", message: "delete requires key parameter", details: nil))
             return
@@ -261,19 +395,19 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
     }
 
     private func deleteAll(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        let (params, _) = parseCall(call)
+        let (params, _) = Self.parseCall(call)
         let response = flutterSecureStorageManager.deleteAll(params: params)
         handleResponse(response, result)
     }
 
     private func readAll(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        let (params, _) = parseCall(call)
+        let (params, _) = Self.parseCall(call)
         let response = flutterSecureStorageManager.readAll(params: params)
         handleResponse(response, result)
     }
 
     private func containsKey(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        let (params, _) = parseCall(call)
+        let (params, _) = Self.parseCall(call)
         guard let _ = params.key else {
             result(FlutterError(code: "Missing Parameter", message: "containsKey requires key parameter", details: nil))
             return
@@ -290,7 +424,7 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
         }
     }
 
-    private func parseCall(_ call: FlutterMethodCall) -> (KeychainQueryParameters, String?) {
+    private static func parseCall(_ call: FlutterMethodCall) -> (KeychainQueryParameters, String?) {
         let arguments = call.arguments as! [String: Any?]
         let options = arguments["options"] as? [String: Any?] ?? [:]
 
@@ -346,4 +480,23 @@ public class FlutterSecureStorageDarwinPlugin: NSObject, FlutterPlugin, FlutterS
             result(response.value)
         }
     }
+}
+
+/// Separate stream so the existing protected-data boolean stream stays compatible.
+private final class ScopeEvaluationEvents: NSObject, FlutterStreamHandler {
+    private var sink: FlutterEventSink?
+    private var sequence: Int64 = 0
+    func emit(nonce: String, epoch: Int64, active: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.sequence += 1
+            self.sink?(["actionNonce": nonce, "ownerEpoch": epoch,
+                        "sequence": self.sequence, "active": active])
+        }
+    }
+    func onListen(withArguments arguments: Any?, eventSink: @escaping FlutterEventSink) -> FlutterError? {
+        sink = eventSink
+        return nil
+    }
+    func onCancel(withArguments arguments: Any?) -> FlutterError? { sink = nil; return nil }
 }

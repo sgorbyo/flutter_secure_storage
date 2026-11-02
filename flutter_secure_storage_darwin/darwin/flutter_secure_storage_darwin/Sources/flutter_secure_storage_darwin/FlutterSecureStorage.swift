@@ -102,6 +102,7 @@ class FlutterSecureStorage {
         value: String,
         context: LAContext,
         localizedReason: String,
+        createOnly: Bool = false,
         isCancelled: () -> Bool
     ) -> FlutterSecureStorageResponse {
         func response(_ status: OSStatus) -> FlutterSecureStorageResponse {
@@ -136,7 +137,7 @@ class FlutterSecureStorage {
         query.removeValue(forKey: kSecMatchLimit)
         let bytes = Data(value.utf8)
         if isCancelled() { return response(errSecUserCanceled) }
-        var status = verifiedKeychain.update(query, [kSecValueData: bytes])
+        var status = createOnly ? errSecItemNotFound : verifiedKeychain.update(query, [kSecValueData: bytes])
         if isCancelled() { return response(errSecUserCanceled) }
         if status == errSecItemNotFound {
             var addition = query
