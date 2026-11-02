@@ -9,14 +9,27 @@ LocalAuthentication needs access to its system service even for LAContext flags;
 a restricted host sandbox can cause false failures. Never interpret a mock
 success as a measured OS prompt count.
 
-Run `python3 tool/authorization_scope/build_probe.py` to build an ad-hoc signed
-standalone arm64 macOS 14+ diagnostic app in a fresh temporary directory. It is
-not launched by the script, uses no provisioning profile or App Group, and does
-not use the production or acceptance bundle identity. It does not load Flutter,
+Run `python3 tool/authorization_scope/build_probe.py --identity CERT_SHA1 --profile PROFILE_PATH`
+to build an Apple Development signed standalone arm64 macOS 14+ diagnostic app
+in a fresh temporary directory. Supply an existing profile permitting
+`cloud.igenogram.authscope.lab`; the script never registers identifiers or
+changes Apple account settings. It embeds that profile and grants only its own
+Keychain group, with no App Group or production/acceptance bundle identity.
+An ad-hoc signature is insufficient: the initial physical attempt authenticated
+successfully but storage then failed with errSecMissingEntitlement (-34018). It does not load Flutter,
 read accounts, call a backend or open any existing archive. Only two fixed
-synthetic item names in a new random Keychain service per process are accessed.
+synthetic item names in a new random Keychain service per process are accessed
+by interactive trials. An additional transient canary in its own random
+service is created/deleted by the noninteractive native preflight.
 The probe is unsandboxed diagnostic tooling, not a distribution artifact; its
 results do not replace verification inside the signed Flutter application.
+
+Before reporting a build ready, the script runs its signed executable with
+`--preflight`: create a userPresence canary, verify that a fresh context with
+interaction disabled cannot read it, then delete precisely that canary. The
+same gate runs at GUI startup; preparation stays disabled if it fails. No
+biometric evaluation is performed by this gate. Its queries include the same
+SecAccessControl as the storage component so they target the same native path.
 
 ## Physical gate
 

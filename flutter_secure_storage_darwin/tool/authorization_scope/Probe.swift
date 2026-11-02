@@ -23,6 +23,7 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let worker = DispatchQueue(label: "auth-scope-probe")
     private var busy = false
     private var ready = false
+    private var preflightPassed = false
     private var needsCleanup = false
     private var buttons = [NSButton]()
     // Only these two synthetic accounts in this random service may be touched.
@@ -32,6 +33,9 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var generation = 0
 
     static func main() {
+        if CommandLine.arguments.contains("--preflight") {
+            exit(nativePreflight() ? 0 : 1)
+        }
         let app = NSApplication.shared
         let delegate = Probe(); app.delegate = delegate
         app.setActivationPolicy(.regular); app.run()
@@ -74,6 +78,8 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
         observe(NSWorkspace.shared.notificationCenter, NSWorkspace.sessionDidBecomeActiveNotification, "session", suspend: false)
         window.center(); window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true); record("probe.ready; physical prompt count must be observed")
+        preflightPassed = nativePreflight()
+        record(preflightPassed ? "preflight.passed; ready for preparation" : "preflight.failed; preparation disabled")
         updateButtons()
     }
     private func observe(_ center: NotificationCenter, _ name: Notification.Name, _ reason: String, suspend: Bool) {
@@ -93,7 +99,7 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     private func updateButtons() {
         for (index, button) in buttons.enumerated() {
-            button.isEnabled = index == 3 ? busy : !busy && (index != 1 && index != 2 || ready)
+            button.isEnabled = index == 3 ? busy : !busy && (index >= 4 || preflightPassed && (index == 0 || ready))
         }
     }
     @objc private func setup() { run("setup", timeout: 120) { scope in
@@ -151,7 +157,7 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for key in ["journal", "copy"] {
             let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword,
                 kSecAttrService: service, kSecAttrAccount: key,
-                kSecAttrSynchronizable: false, kSecUseDataProtectionKeychain: false]
+                kSecAttrSynchronizable: false]
             let status = SecItemDelete(query as CFDictionary)
             record("cleanup.item status=\(status)")
             if status != errSecSuccess && status != errSecItemNotFound { cleaned = false }
