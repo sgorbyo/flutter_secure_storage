@@ -41,10 +41,23 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
         app.setActivationPolicy(.regular); app.run()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 650),
+        let menu = NSMenu()
+        let applicationItem = NSMenuItem()
+        menu.addItem(applicationItem)
+        let applicationMenu = NSMenu(title: "iGen Auth Scope Lab")
+        let hide = NSMenuItem(title: "Nascondi laboratorio", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        hide.target = NSApp
+        applicationMenu.addItem(hide)
+        applicationMenu.addItem(.separator())
+        let quit = NSMenuItem(title: "Esci dal laboratorio", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.target = NSApp
+        applicationMenu.addItem(quit)
+        applicationItem.submenu = applicationMenu
+        NSApp.mainMenu = menu
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.delegate = self
-        window.title = "iGen — laboratorio autorizzazioni sintetiche"
+        window.title = "iGen — laboratorio autorizzazioni sintetiche v3"
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
         window.contentView!.addSubview(stack)
@@ -60,7 +73,8 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                 ("3. Timeout del prompt dopo 4 secondi", #selector(timeout)),
                                 ("Revoca operazione attiva", #selector(revoke)),
                                 ("Pulisci soltanto i due elementi sintetici", #selector(cleanup)),
-                                ("Salva resoconto…", #selector(exportReport))] {
+                                ("Salva resoconto…", #selector(exportReport)),
+                                ("4. Prova con nascondimento automatico dopo autenticazione", #selector(hiddenTrial))] {
             let button = NSButton(title: title, target: self, action: action)
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
             stack.addArrangedSubview(button); buttons.append(button)
@@ -99,7 +113,7 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     private func updateButtons() {
         for (index, button) in buttons.enumerated() {
-            button.isEnabled = index == 3 ? busy : !busy && (index >= 4 || preflightPassed && (index == 0 || ready))
+            button.isEnabled = index == 3 ? busy : !busy && (index == 4 || index == 5 || preflightPassed && (index == 0 || index == 6 || ready))
         }
     }
     @objc private func setup() { run("setup", timeout: 120) { scope in
@@ -120,6 +134,26 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let result = scope.read("copy")
         return result.0 == errSecSuccess && result.1 != "synthetic copy" ? errSecDecode : result.0
     } }
+    @objc private func hiddenTrial() {
+        let prepare = !ready
+        run("hidden", timeout: 120) { scope in
+        if prepare {
+            let status = scope.writeVerified("journal", value: "synthetic journal")
+            guard status == errSecSuccess else { return status }
+        }
+        let read = scope.read("journal")
+        guard read.0 == errSecSuccess else { return read.0 }
+        self.record("checkpoint.read; hiding.begin")
+        DispatchQueue.main.sync { NSApp.hide(nil) }
+        Thread.sleep(forTimeInterval: 3)
+        let status = scope.writeVerified("journal", value: "synthetic after hide")
+        DispatchQueue.main.async {
+            NSApp.unhide(nil)
+            self.window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        return status
+    } }
     @objc private func timeout() { run("timeout", timeout: 4) { scope in scope.read("journal").0 } }
     @objc private func revoke() {
         generation += 1; contexts.cancel(); record("explicit.revoke")
@@ -127,7 +161,7 @@ private final class Probe: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func run(_ phase: String, timeout: TimeInterval, body: @escaping (AuthorizationScope) -> OSStatus) {
         guard !busy else { return }; busy = true; updateButtons()
         let token = generation
-        if phase == "setup" || phase == "mixed" { needsCleanup = true }
+        if phase == "setup" || phase == "mixed" || phase == "hidden" { needsCleanup = true }
         record("\(phase).begin")
         worker.async {
             let auth = ObservedAuthentication(record: self.record)

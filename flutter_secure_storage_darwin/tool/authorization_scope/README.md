@@ -40,7 +40,7 @@ SecAccessControl as the storage component so they target the same native path.
    Expected success and one explicit authorization evaluation. Record actual
    panel count independently. On repeat, copy already exists, so use Cleanup
    and Prepare again when testing *creation* rather than update.
-3. Use the mixed action with cancellation, hide or sleep during the delay;
+3. Use the mixed action with cancellation or sleep during the delay;
    verify that the operation does not report a current successful result.
 4. Timeout: leave the prompt unapproved. At four seconds the independent timer
    invalidates its context. Expect cancellation, no automatic retry. A prompt
@@ -60,3 +60,14 @@ independent monotonic deadline includes idle/network time. Revocation cannot
 roll back writes or retrieve values already delivered. No polling or implicit
 reauthentication is performed. Constants (32 slots, 64 calls, <=120 seconds) are
 experimental bounds, not a validated workload policy.
+
+
+The v3 probe installs the standard macOS Hide (Command-H) and Quit menu items.
+Earlier builds omitted this menu; a Command-H trial in those builds is not a
+lifecycle test. Button 4 prepares a synthetic journal if necessary, reads it,
+then calls the actual NSApplication.hide action on the main thread. After three
+seconds it attempts a write using the old scope and brings the app back. This
+must produce a real didHide notification, revocation and a refused subsequent
+write. It does not inject a fake lifecycle notification. No separate setup is
+needed for this trial. Check lifecycle.hidden.revoke plus status=-128 and
+current=false; a generic cancellation status alone is insufficient.
