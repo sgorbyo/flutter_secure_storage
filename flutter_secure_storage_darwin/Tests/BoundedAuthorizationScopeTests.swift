@@ -1,5 +1,6 @@
 import XCTest
 import Security
+import LocalAuthentication
 @testable import StorageCore
 
 final class BoundedAuthorizationScopeTests: XCTestCase {
@@ -20,6 +21,31 @@ final class BoundedAuthorizationScopeTests: XCTestCase {
     }
     func failure(_ code: String, _ body: () throws -> Void) {
         XCTAssertThrowsError(try body()) { error in XCTAssertEqual((error as? ScopeFailure)?.code, code) }
+    }
+    func testAuthenticationOutcomesRemainDistinctThroughScope() throws {
+        for (status, code): (OSStatus, String) in [
+            (VerifiedAuthenticationStatus.userCancelled, "userCancelled"),
+            (VerifiedAuthenticationStatus.interrupted, "interrupted"),
+            (errSecUserCanceled, "interrupted"), (errSecAuthFailed, "denied")
+        ] {
+            let fake = FakeKeychain(), auth = FakeAuthentication()
+            auth.status = status
+            let subject = try scope(fake, auth)
+            failure(code) { try subject.write("synthetic", value: "synthetic", createOnly: false, epoch: 0, sequence: 1) }
+            XCTAssertTrue(fake.calls.isEmpty)
+            failure(code) { try subject.checkActive() }
+            XCTAssertEqual(auth.calls, 1)
+        }
+    }
+    func testOnlyExplicitUserCancellationHasUserCancelledStatus() {
+        XCTAssertEqual(SystemVerifiedAuthentication.status(success: true, error: nil), errSecSuccess)
+        XCTAssertEqual(SystemVerifiedAuthentication.status(success: false, error: LAError(.userCancel)), VerifiedAuthenticationStatus.userCancelled)
+        for code: LAError.Code in [.appCancel, .systemCancel, .invalidContext] {
+            XCTAssertEqual(SystemVerifiedAuthentication.status(success: false, error: LAError(code)), VerifiedAuthenticationStatus.interrupted)
+        }
+        for code: LAError.Code in [.authenticationFailed, .biometryLockout, .userFallback, .notInteractive] {
+            XCTAssertEqual(SystemVerifiedAuthentication.status(success: false, error: LAError(code)), errSecAuthFailed)
+        }
     }
     func testMixedCallsUseOneEvaluationAndRealReadbacks() throws {
         let fake = FakeKeychain(), auth = FakeAuthentication()

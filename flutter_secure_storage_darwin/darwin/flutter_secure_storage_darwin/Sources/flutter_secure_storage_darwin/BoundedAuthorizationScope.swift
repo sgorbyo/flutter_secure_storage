@@ -161,7 +161,9 @@ final class BoundedAuthorizationScope {
         switch status {
         case errSecInteractionNotAllowed: code = "interactionRequired"
         case errSecDuplicateItem: code = "duplicateItem"
-        case errSecAuthFailed, errSecUserCanceled: code = "denied"
+        case VerifiedAuthenticationStatus.userCancelled: code = "userCancelled"
+        case VerifiedAuthenticationStatus.interrupted, errSecUserCanceled: code = "interrupted"
+        case errSecAuthFailed: code = "denied"
         case errSecDecode: code = "verificationFailed"
         case errSecParam: code = "invalidPlan"
         default: code = "storageFailure"

@@ -96,21 +96,21 @@ void main() {
     await Future.wait([writeCheck, queuedCheck]);
     expect(calls.where((c) => c.method == 'scopeCheck'), isEmpty);
   });
-  test('native denial retires scope and never falls back to ordinary calls',
-      () async {
-    final scope = await open();
-    responder = (call) async {
-      if (call.method == 'scopeReadBatch')
-        throw PlatformException(code: 'denied');
-      return null;
-    };
-    await expectLater(
-        scope.readBatch(['synthetic']), throwsA(failure('denied')));
-    await expectLater(scope.checkActive(), throwsA(failure('revoked')));
-    await scope.close();
-    expect(calls.map((c) => c.method),
-        ['scopeOpen', 'scopeReadBatch', 'scopeClose']);
-  });
+  for (final code in ['denied', 'userCancelled', 'interrupted']) {
+    test('native $code retires scope and preserves its cause', () async {
+      final scope = await open();
+      responder = (call) async {
+        if (call.method == 'scopeReadBatch')
+          throw PlatformException(code: code);
+        return null;
+      };
+      await expectLater(scope.readBatch(['synthetic']), throwsA(failure(code)));
+      await expectLater(scope.checkActive(), throwsA(failure('revoked')));
+      await scope.close();
+      expect(calls.map((c) => c.method),
+          ['scopeOpen', 'scopeReadBatch', 'scopeClose']);
+    });
+  }
   test('partial batch retires scope', () async {
     final scope = await open();
     responder = (call) async =>

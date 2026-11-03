@@ -201,6 +201,8 @@ final class DarwinScopeException implements Exception {
     'revoked',
     'expired',
     'denied',
+    'userCancelled',
+    'interrupted',
     'interactionRequired',
     'duplicateItem',
     'verificationFailed',
